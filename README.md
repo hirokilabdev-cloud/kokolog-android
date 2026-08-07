@@ -1,2 +1,39 @@
-# kokolog-android
-An Android app to gently record and reflect on your emotions.
+# KokoLog
+
+Record. Reflect. Grow.
+
+ココログは、
+感情をそっと置いておき、
+振り返り、
+少しずつ自分を理解していくための
+Androidアプリです。
+
+---
+
+## Roadmap
+
+### v1.0 ✅
+- 感情記録
+- 本棚UI
+- 感情変化
+- 気にしない
+
+### v1.1
+- 📅 カレンダー
+
+### v1.2
+- 📊 基本分析
+
+### v1.3
+- 🤖 AI週間レポート
+
+### v1.4
+- 🤖 AI月間レポート
+
+### v2.0
+- 💡 AI行動提案
+
+### Future
+- 👨‍👩‍👧 親子モード
+- ☁️ クラウド同期
+- 🌐 Web版
