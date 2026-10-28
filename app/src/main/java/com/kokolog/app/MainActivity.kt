@@ -1818,7 +1818,7 @@ fun HomeScreen(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReflectionScreen(
+fun ReflectionCategoryContent(
 
     // 表示対象の感情ログ一覧
     logs: List<EmotionLog>,
@@ -1862,9 +1862,8 @@ fun ReflectionScreen(
         val filterUnselectedColor = Color(0xFFF3ECE3)
         val filterSelectedBeigeColor = Color(0xFFD9C6AF)
         val filterTextColor = KokologTextColor
-        KokologHeader(
-            title = "振り返り"
-        )
+        // ヘッダーと表示切替は ReflectionScreen 側に移管した。
+        // この画面は従来のフィルター付き本棚の中身だけを担当する。
         val chunkedFilters = filterEmotions.chunked(2)
         FilterRowWithLabel(
             label = "ココロで絞る"
@@ -1942,17 +1941,6 @@ fun ReflectionScreen(
             )
             return
         } else {
-            val categoryOrder = listOf(
-                "仕事",
-                "人間関係",
-                "家族",
-                "健康",
-                "学校",
-                "お金",
-                "趣味",
-                "その他"
-            )
-
             val categoryFilters = listOf(
                 "すべて",
                 "仕事",
@@ -2026,23 +2014,6 @@ fun ReflectionScreen(
 
                     emotionMatched && categoryMatched && dateMatched && ignoredMatch
                 }
-
-            val groupedLogs =
-                filteredLogs
-                    .groupBy { log ->
-                        log.category
-                    }
-                    .toList()
-                    .sortedBy { item ->
-                        val category = item.first
-                        val index = categoryOrder.indexOf(category)
-
-                        if (index == -1) {
-                            Int.MAX_VALUE
-                        } else {
-                            index
-                        }
-                    }
 
             FilterRowWithLabel(
                 label = "棚で絞る"
@@ -2255,177 +2226,12 @@ fun ReflectionScreen(
                     }
                 }
             }
-            if (filteredLogs.isEmpty()) {
-                EmptyStateCard(
-                    title = "条件に合うココログがありません",
-                    message = "別の棚や期間も、そっと見てみましょう",
-                    topPadding = 4.dp,
-                    verticalPadding = 2
-                        .dp
-                )
-            } else {
-                // 新しい順に表示
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(
-                            start = 18.dp,
-                            end = 18.dp,
-                            top = 14.dp,
-                            bottom = 8.dp
-                        ),
-
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-
-                    contentPadding = PaddingValues(
-                        bottom = 20.dp
-                    )
-                ) {
-
-                    items(groupedLogs) { item ->
-
-                        val category = item.first
-                        val logsInCategory = item.second
-
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .wrapContentHeight(),
-
-                            shape = RoundedCornerShape(24.dp),
-
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFFFFBF4)
-                            ),
-
-                            border = BorderStroke(
-                                1.dp,
-                                Color(0xFFE0D4C3)
-                            ),
-
-                            elevation = CardDefaults.cardElevation(
-                                defaultElevation = 2.dp
-                            )
-                        ) {
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(
-                                        start = 14.dp,
-                                        end = 14.dp,
-                                        top = 14.dp,
-                                        bottom = 8.dp
-                                    ),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-
-                                // 左線
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(6.dp)
-                                        .background(
-                                            Color(0xFFE0D4C3)
-                                        )
-                                )
-
-                                Spacer(
-                                    modifier = Modifier.width(10.dp)
-                                )
-
-                                // ラベル
-                                Surface(
-                                    modifier = Modifier.offset(y = (-8).dp),
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = Color(0xFFE6D9C9)
-                                ) {
-                                    Text(
-                                        text = "${category}の棚(${logsInCategory.size})",
-
-                                        modifier = Modifier.padding(
-                                            horizontal = 16.dp,
-                                            vertical = 8.dp
-                                        ),
-
-                                        fontWeight = FontWeight.Bold,
-
-                                        color = KokologTextColor
-                                    )
-                                }
-
-                                Spacer(
-                                    modifier = Modifier.width(10.dp)
-                                )
-
-                                // 右線
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(6.dp)
-                                        .background(
-                                            Color(0xFFE0D4C3)
-                                        )
-                                )
-                            }
-                            Spacer(
-                                modifier = Modifier.height(6.dp)
-                            )
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                contentPadding = PaddingValues(
-                                    start = 6.dp,
-                                    end = 18.dp
-                                )
-                            ) {
-                                itemsIndexed(logsInCategory) { index, log ->
-
-                                    val isFocus = index == 1
-
-                                    BookshelfSpineCard(
-                                        log = log,
-                                        onClick = {
-                                            onLogClick(log)
-                                        },
-                                        modifier = Modifier
-                                            .width(
-                                                //if (isFocus) 104.dp else
-                                                76.dp
-                                            )
-                                            .height(
-                                                //if (isFocus) 190.dp else
-                                                250.dp
-                                            )
-                                    )
-                                }
-                            }
-
-                            Spacer(
-                                modifier = Modifier.height(6.dp)
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth(0.92f)
-                                        .height(6.dp)
-                                        .background(
-                                            Color(0xFFD6C6B8),
-                                            RoundedCornerShape(12.dp)
-                                        )
-                                )
-                            }
-
-                            Spacer(
-                                modifier = Modifier.height(10.dp)
-                            )
-                        }
-                    }
-                }
-            }
+            // STEP 1: 棚の表示部分を共通化。従来のフィルター条件と遷移は維持する。
+            // STEP 2以降のカレンダー側も、条件で絞ったログをこの部品に渡せる。
+            BookshelfList(
+                logs = filteredLogs,
+                onLogClick = onLogClick
+            )
         }
         summaryDialogType?.let { type ->
             val summary = createKokoroSummary(
