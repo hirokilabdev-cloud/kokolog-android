@@ -3,6 +3,7 @@ package com.kokolog.app
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -24,6 +25,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -39,8 +41,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextOverflow
@@ -139,6 +144,9 @@ private fun ReflectionCalendarContent(
     val month = YearMonth.parse(monthKey)
     val today = LocalDate.now()
     val zoneId = ZoneId.systemDefault()
+    // 誤操作を防ぐため、ある程度横に動かしたときだけ月を切り替える。
+    // dpで閾値を決めることで、画面密度の違うスマホでもほぼ同じ操作感にする。
+    val monthSwipeThresholdPx = with(LocalDensity.current) { 56.dp.toPx() }
 
     // 表示中の月だけを抽出。日付の判定は端末のローカルタイムゾーンを使う。
     // 保存済みログが編集・削除された場合も最新の一覧から再集計する。
@@ -207,7 +215,38 @@ private fun ReflectionCalendarContent(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Card(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                // カレンダー領域だけで左右スワイプを受け付ける。
+                // detectHorizontalDragGestures は横方向のドラッグだけを検知するので、
+                // 画面の縦スクロールや通常の日付タップはそのまま利用できる。
+                .pointerInput(monthKey) {
+                    var dragDistanceX = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragDistanceX = 0f },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            dragDistanceX += dragAmount
+                        },
+                        onDragEnd = {
+                            val nextMonth = when {
+                                // 左へスワイプ → 翌月
+                                dragDistanceX <= -monthSwipeThresholdPx -> month.plusMonths(1)
+                                // 右へスワイプ → 前月
+                                dragDistanceX >= monthSwipeThresholdPx -> month.minusMonths(1)
+                                else -> null
+                            }
+                            if (nextMonth != null) {
+                                monthKey = nextMonth.toString()
+                                // 前の月で選んだ日付・カテゴリーを持ち越さない。
+                                selectedDay = null
+                                selectedCategory = null
+                            }
+                            dragDistanceX = 0f
+                        },
+                        onDragCancel = { dragDistanceX = 0f }
+                    )
+                },
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBF4))
         ) {
@@ -492,15 +531,25 @@ private fun ReflectionCalendarContent(
                         textAlign = TextAlign.Center
                     )
                 } else {
-                    CalendarCategoryGrid(categoryCounts) { category ->
-                        // 月別カテゴリは月全体が対象。選択日のハイライトは維持する。
-                        selectedCategory = category
-                        bookshelfMode = "month_category"
-                    }
+                    CalendarCategoryGrid(
+                        counts = categoryCounts,
+                        // 月別の親カードは白系なので、押せる部分を淡いベージュにする。
+                        // 日別サマリー（ベージュ背景＋白いカード）と統一感を持たせる。
+                        tileColor = Color(0xFFF3ECE3),
+                        onCategoryClick = { category ->
+                            // 月別カテゴリは月全体が対象。選択日のハイライトは維持する。
+                            selectedCategory = category
+                            bookshelfMode = "month_category"
+                        }
+                    )
                 }
             }
         }
 
+        // 右下の「＋」ボタンが月別カテゴリーのカードに重なるため、
+        // 最後までスクロールすれば全カテゴリーを押せるように余白を確保する。
+        // 画面の途中では浮動ボタンが重なることがあるが、末尾で操作可能になる。
+        Spacer(modifier = Modifier.height(144.dp))
     }
 
     if (showMonthPicker) {
@@ -547,6 +596,7 @@ private fun CalendarDayLegend(color: Color, outline: Color?, label: String) {
 @Composable
 private fun CalendarCategoryGrid(
     counts: Map<String, Int>,
+    tileColor: Color = Color(0xFFFFFBF4),
     onCategoryClick: (String) -> Unit
 ) {
     val defaultCategories = listOf("仕事", "人間関係", "家族", "健康", "学校", "お金", "趣味", "その他")
@@ -563,7 +613,7 @@ private fun CalendarCategoryGrid(
                     Row(
                         modifier = Modifier.weight(1f)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFFFFFBF4))
+                            .background(tileColor)
                             .clickable(role = Role.Button) { onCategoryClick(category) }
                             .padding(horizontal = 12.dp, vertical = 13.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -689,6 +739,26 @@ private fun YearMonthPickerDialog(
                         singleLine = true,
                         label = { Text("西暦（年）") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        // Material3 のデフォルト配色だと薄い文字になる場合があるため、
+                        // 入力中・未選択時・エラー時とも年の数字を濃い色で固定する。
+                        textStyle = TextStyle(
+                            color = KokologTextColor,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = KokologTextColor,
+                            unfocusedTextColor = KokologTextColor,
+                            errorTextColor = KokologTextColor,
+                            focusedLabelColor = KokologTextColor,
+                            unfocusedLabelColor = KokologSubTextColor,
+                            errorLabelColor = Color(0xFFAD716A),
+                            focusedBorderColor = Color(0xFF9A826D),
+                            unfocusedBorderColor = Color(0xFFB8A898),
+                            errorBorderColor = Color(0xFFAD716A),
+                            cursorColor = KokologTextColor,
+                            errorCursorColor = Color(0xFFAD716A)
+                        ),
                         isError = !validYear
                     )
                     IconButton(onClick = {
