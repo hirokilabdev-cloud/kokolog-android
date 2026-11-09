@@ -67,6 +67,10 @@ import java.time.ZoneId
 @Composable
 fun ReflectionScreen(
     logs: List<EmotionLog>,
+    reportLogs: List<EmotionLog>,
+    onMonthlyReportClick: (Int, Int) -> Unit,
+    onReportArchiveClick: () -> Unit,
+    readReportMonthKeys: Set<String>,
     onLogClick: (EmotionLog) -> Unit
 ) {
     var selectedTab by rememberSaveable { mutableStateOf("calendar") }
@@ -105,6 +109,10 @@ fun ReflectionScreen(
                 stateHolder.SaveableStateProvider("calendar_view") {
                     ReflectionCalendarContent(
                         logs = logs,
+                        reportLogs = reportLogs,
+                        onMonthlyReportClick = onMonthlyReportClick,
+                        onReportArchiveClick = onReportArchiveClick,
+                        readReportMonthKeys = readReportMonthKeys,
                         onLogClick = onLogClick
                     )
                 }
@@ -131,6 +139,10 @@ fun ReflectionScreen(
 @Composable
 private fun ReflectionCalendarContent(
     logs: List<EmotionLog>,
+    reportLogs: List<EmotionLog>,
+    onMonthlyReportClick: (Int, Int) -> Unit,
+    onReportArchiveClick: () -> Unit,
+    readReportMonthKeys: Set<String>,
     onLogClick: (EmotionLog) -> Unit
 ) {
     var monthKey by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
@@ -163,6 +175,15 @@ private fun ReflectionCalendarContent(
         categoryCounts[category] = (categoryCounts[category] ?: 0) + 1
     }
     val monthCount = logsInMonth.size
+
+    // 直近で記録がある「確定済みの月」を探す。
+    // カレンダーの表示フィルターに関係なく、すべての記録から判定する。
+    // 記録がない月に、レポートが届いたと誤認させない。
+    val currentMonth = YearMonth.now()
+    val latestReportMonth = reportLogs.asSequence()
+        .map { log -> YearMonth.from(Instant.ofEpochMilli(log.createdAt).atZone(zoneId)) }
+        .filter { it < currentMonth }
+        .maxOrNull()
 
     // 日付選択時に、月内の該当日ログを抽出する。
     // この選択だけでは画面遷移せず、カレンダー下部の内訳を更新する。
@@ -214,6 +235,96 @@ private fun ReflectionCalendarContent(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // STEP3: 最新の確定済みレポートへの入口をカレンダー上部に配置。
+        // 未閲覧は案内カード、閲覧後は省スペースのコンパクトカードに変化する。
+        // 既読状態はMainActivityで月ごとに管理し、画面復帰時にも反映される。
+        if (latestReportMonth != null) {
+            val reportKey = latestReportMonth.toString() // YYYY-MM
+            val isUnread = reportKey !in readReportMonthKeys
+            Card(
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(role = Role.Button) {
+                        onMonthlyReportClick(latestReportMonth.year, latestReportMonth.monthValue)
+                    },
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isUnread) Color(0xFFE7EFE6) else Color(0xFFF3ECE3)
+                )
+            ) {
+                if (isUnread) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "📖 ${latestReportMonth.year}年${latestReportMonth.monthValue}月のココロが届きました",
+                                modifier = Modifier.weight(1f),
+                                color = KokologTextColor,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier.clip(RoundedCornerShape(50))
+                                    .background(Color(0xFFD0E3D1))
+                                    .padding(horizontal = 9.dp, vertical = 4.dp)
+                            ) {
+                                Text("NEW", color = Color(0xFF48634D), fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Text(
+                            "残してきたココロを、そっと振り返ってみませんか？",
+                            color = KokologSubTextColor,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            "レポートを見る　〉",
+                            modifier = Modifier.align(Alignment.End),
+                            color = Color(0xFF48634D),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "📖 ${latestReportMonth.year}年${latestReportMonth.monthValue}月のココロを振り返る",
+                            modifier = Modifier.weight(1f),
+                            color = KokologTextColor,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text("〉", color = KokologTextColor, fontSize = 19.sp)
+                    }
+                }
+            }
+        }
+
+        // 過去のレポートへいつでも進める入口。確定済みの記録がない場合は出さない。
+        if (latestReportMonth != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(role = Role.Button) { onReportArchiveClick() }
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("過去の月次レポートを見る 〉", color = KokologSubTextColor,
+                    fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+
         Card(
             modifier = Modifier
                 .fillMaxWidth()
