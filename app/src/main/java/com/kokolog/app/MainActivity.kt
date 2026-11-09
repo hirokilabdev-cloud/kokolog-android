@@ -115,6 +115,25 @@ class MainActivity : ComponentActivity() {
                     mutableStateListOf<EmotionChangeLog>()
                 }
 
+                // STEP3: 月次レポートの閲覧済み年月を端末に保存する。
+                // 既読は YYYY-MM 単位で保存し、別の月のNEW表示を消さない。
+                // Roomの感情記録と課金状態には影響しない。
+                val readReportMonthKeys = remember {
+                    mutableStateListOf<String>().apply {
+                        addAll(prefs.getStringSet("monthly_report_read_months", emptySet())
+                            ?.toSet().orEmpty())
+                    }
+                }
+                val markMonthlyReportViewed: (Int, Int) -> Unit = { year, month ->
+                    val key = "%04d-%02d".format(Locale.ROOT, year, month)
+                    if (key !in readReportMonthKeys) {
+                        readReportMonthKeys.add(key)
+                        prefs.edit()
+                            .putStringSet("monthly_report_read_months", readReportMonthKeys.toSet())
+                            .apply()
+                    }
+                }
+
                 // 最近のココロの表示非表示
                 var showRecentLogs by remember {
                     mutableStateOf(
@@ -376,14 +395,59 @@ class MainActivity : ComponentActivity() {
                              */
                             composable(Routes.REFLECTION) {
                                 ReflectionScreen(
-                                    // 一覧表示用ログ
+                                    // カレンダー・本棚の表示は従来の設定を維持。
                                     logs = visibleEmotionLogs,
+                                    // レポートは「気にしない」の表示設定に関係なく全件を集計する。
+                                    reportLogs = emotionLogs,
+                                    readReportMonthKeys = readReportMonthKeys.toSet(),
+                                    onReportArchiveClick = {
+                                        navController.navigate(Routes.MONTHLY_REPORT_ARCHIVE)
+                                    },
+                                    // 月次レポート画面へ遷移する（年月をルートに保持）。
+                                    onMonthlyReportClick = { year, month ->
+                                        navController.navigate("${Routes.MONTHLY_REPORT}/$year/$month")
+                                    },
 
                                     // ログタップ時
                                     onLogClick = { log ->
 
                                         // 詳細画面へ移動
                                         navController.navigate("${Routes.DETAIL}/${log.id}")
+                                    }
+                                )
+                            }
+
+                            /**
+                             * 月次無料レポート（STEP3）
+                             * カレンダーと別画面。月次集計はRoomの全記録を対象にする。
+                             * 画面を開いた対象月を既読として保存する。
+                             */
+                            composable("${Routes.MONTHLY_REPORT}/{year}/{month}") { backStackEntry ->
+                                val year = backStackEntry.arguments?.getString("year")?.toIntOrNull()
+                                val month = backStackEntry.arguments?.getString("month")?.toIntOrNull()
+                                if (year != null && year in 2000..2100 && month != null && month in 1..12) {
+                                    MonthlyReportScreen(
+                                        initialYear = year,
+                                        initialMonth = month,
+                                        logs = emotionLogs,
+                                        changeLogs = emotionChangeLogs,
+                                        onMonthViewed = markMonthlyReportViewed,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                }
+                            }
+
+                            /**
+                             * STEP3：過去の月次レポート一覧（記録のある確定月を列挙）。
+                             * カレンダーからアクセスでき、一覧から対象月の画面へ進む。
+                             */
+                            composable(Routes.MONTHLY_REPORT_ARCHIVE) {
+                                MonthlyReportArchiveScreen(
+                                    logs = emotionLogs,
+                                    readMonthKeys = readReportMonthKeys.toSet(),
+                                    onBack = { navController.popBackStack() },
+                                    onReportClick = { year, month ->
+                                        navController.navigate("${Routes.MONTHLY_REPORT}/$year/$month")
                                     }
                                 )
                             }
@@ -4068,6 +4132,8 @@ object Routes {
     const val HOME = "home"
     const val RECORD = "record"
     const val REFLECTION = "reflection"
+    const val MONTHLY_REPORT = "monthly_report"
+    const val MONTHLY_REPORT_ARCHIVE = "monthly_report_archive"
     const val SETTINGS = "settings"
 
     // 詳細画面
