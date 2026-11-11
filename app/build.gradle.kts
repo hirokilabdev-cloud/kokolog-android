@@ -30,6 +30,13 @@ android {
                 "proguard-rules.pro"
             )
         }
+
+        // 内部テスト専用ビルド
+        create("internalPreview") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            isDebuggable = false
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -37,6 +44,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

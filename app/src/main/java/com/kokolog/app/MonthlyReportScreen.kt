@@ -56,7 +56,10 @@ fun MonthlyReportScreen(
     logs: List<EmotionLog>,
     changeLogs: List<EmotionChangeLog>,
     onMonthViewed: (Int, Int) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    // STEP4.2: Debug / internalPreview ビルドでのみ詳細画面を確認する。
+    enableDetailTesterPreview: Boolean = false,
+    onDetailPreviewClick: (Int, Int) -> Unit = { _, _ -> }
 ) {
     // 保存後に戻ってきたときにも選択していた月を維持する。
     var monthKey by rememberSaveable(initialYear, initialMonth) {
@@ -78,6 +81,7 @@ fun MonthlyReportScreen(
     }
     val summary = report.summary
     val comparison = report.details.comparison
+    val offerUi = MonthlyDetailAccessPolicy.presentation(report, enableDetailTesterPreview)
 
     // 実際に画面を開いた月だけ「閲覧済み」にする。
     // 記録0件の月は通知対象にしないため、閲覧履歴も付けない。
@@ -285,7 +289,7 @@ fun MonthlyReportScreen(
                     )
                 } else {
                     Text(
-                        "この月は、まだ十分な傾向を読み取れませんでした。\nひとつひとつの記録を、そのまま大切に残しておきましょう。",
+                        "今月のココロは、ひとつひとつが大切な記録です。\n気になる気持ちがあれば、いつでも読み返してみてください。",
                         color = Color(0xFF405847),
                         fontSize = 14.sp,
                         lineHeight = 22.sp
@@ -293,33 +297,46 @@ fun MonthlyReportScreen(
                 }
             }
 
-            // 課金前段階の予告。解放処理・購入画面が未実装なので押せないボタンは置かない。
-            ReportPanel(Color(0xFFF0E8DC)) {
-                ReportTitle("もっと深く、ココロを知る", "📖")
-                Text(
-                    "記録から、こんな角度でも振り返れる詳細レポートを準備しています。",
-                    color = KokologSubTextColor,
-                    fontSize = 14.sp,
-                    lineHeight = 22.sp
-                )
-                listOf(
-                    "感情の強さと変化",
-                    "曜日・時間帯の傾向",
-                    "カテゴリー・タグとの関係",
-                    "前月のココロとの比較",
-                    "今月のココロの総括"
-                ).forEach { label ->
-                    Text("🔒 $label", color = KokologTextColor, fontSize = 14.sp)
+            // 販売の予告は、独立した発見が2件以上ある等、提供条件を満たす月だけ。
+            // 条件を満たさない月には、追加の記録を促す購入導線も表示しない。
+            if (offerUi.showPaidIntroduction) {
+                ReportPanel(Color(0xFFF0E8DC)) {
+                    ReportTitle("もっと深く、ココロを知る", "📖")
+                    Text(
+                        "この月の記録には、もう少し詳しく振り返れる特徴が見つかりました。",
+                        color = KokologTextColor,
+                        fontSize = 14.sp,
+                        lineHeight = 22.sp
+                    )
+                    ReportSubText("感情の強さや出来事とのつながりを、根拠となる記録と一緒に振り返る詳細レポートを準備しています。")
+                    ReportSubText("※詳細レポートと初回無料体験は準備中です。現在、購入はできません。")
                 }
+            }
+        }
+
+        // テスト用入口は購入案内ではない。対象外の月や0件の月もQAで確認可能。
+        // 通常Releaseでは表示せず、MainActivityのルートでも再度ブロックする。
+        if (offerUi.showTesterPreview) {
+            ReportPanel(Color(0xFFE7EFE6)) {
+                ReportTitle("詳細レポートを確認する（テスト用）", "🧪")
                 Text(
-                    if (report.readiness.canOfferMonthlyDetail)
-                        "詳細レポートと初回無料体験は、今後のアップデートで利用できるようになります。"
+                    if (offerUi.isEligibleForPaidDetail)
+                        "この月には詳しく振り返れる発見が見つかりました。画面の読みやすさを確認できます。"
                     else
-                        "詳細な傾向を読むためには、もう少し記録が必要です。初回無料体験は今後実装予定です。",
-                    color = KokologSubTextColor,
-                    fontSize = 13.sp,
-                    lineHeight = 21.sp
+                        "この月は詳細分析の提供対象ではありませんが、テストとして表示を確認できます。",
+                    color = Color(0xFF405847), fontSize = 13.sp, lineHeight = 21.sp
                 )
+                androidx.compose.material3.Button(
+                    onClick = { onDetailPreviewClick(month.year, month.monthValue) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF8E7C68)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("詳細レポートを体験する（テスト版）", fontSize = 13.sp)
+                }
+                ReportSubText("※内部テスト用プレビューです。購入・初回無料体験は発生しません。")
             }
         }
 

@@ -7,7 +7,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * KokoLog Report Analyzer v1.0
+ * KokoLog Report Analyzer v1.1
  *
  * ・Room の Entity/DAO/DB スキーマは変更しない。
  * ・このファイルは Android UI に依存しない、純粋な集計処理。
@@ -192,10 +192,20 @@ data class ReportInsight(
 )
 
 /** 詳細分析を販売/無料解放する前に、提供可能な内容を判定する。 */
+enum class ReportOfferReason {
+    READY,
+    NOT_MONTHLY,
+    INSUFFICIENT_RECORDS,
+    INSUFFICIENT_FINDINGS
+}
+
 data class ReportReadiness(
     val hasSufficientRecords: Boolean,
     val availableSections: List<String>,
-    val canOfferMonthlyDetail: Boolean
+    val canOfferMonthlyDetail: Boolean,
+    // 販売可否を件数だけで判定しない。表示できる独立した発見も確認する。
+    val featuredInsightCount: Int = 0,
+    val offerReason: ReportOfferReason = ReportOfferReason.INSUFFICIENT_RECORDS
 )
 
 data class ReportDetails(
@@ -214,8 +224,76 @@ data class ReportResult(
     val summary: ReportSummary,
     val details: ReportDetails,
     val freePreview: ReportInsight?,
-    val readiness: ReportReadiness
+    val readiness: ReportReadiness,
+    // 同じ根拠を繰り返さない、今月の注目ポイント（最大3件）。
+    // 全候補は details.insights に残し、各分析セクションから利用できる。
+    val featuredInsights: List<ReportInsight> = emptyList()
 )
+
+/**
+ * 詳細レポートの注目ポイントを選ぶ。
+ * 
+ * - 30件程度の記録でも「多くのグラフ」より2〜3個の異なる気づきを重視する。
+ * - カテゴリー・前期間比較・強度を優先し、タグ・時間帯・曜日も採用候補にする。
+ * - 同じ記録を根拠にする似た発見を複数選ばない。
+ * - score は提示順の補助に使うだけで、信頼度・診断スコアではない。
+ */
+object ReportInsightSelector {
+    private const val MAX_FEATURED = 3
+
+    fun select(insights: List<ReportInsight>, maxCount: Int = MAX_FEATURED): List<ReportInsight> {
+        if (maxCount <= 0 || insights.isEmpty()) return emptyList()
+
+        val preferred = listOf(
+            ReportInsightKind.CATEGORY,
+            ReportInsightKind.PERIOD_COMPARISON,
+            ReportInsightKind.INTENSITY,
+            ReportInsightKind.TAG,
+            ReportInsightKind.TIME_SLOT,
+            ReportInsightKind.WEEKDAY
+        )
+        // まず分析種類の多様性を優先し、同じ種類を増やすのは最後にする。
+        val sorted = insights.sortedWith(
+            compareBy<ReportInsight> { preferred.indexOf(it.kind).let { index -> if (index < 0) Int.MAX_VALUE else index } }
+                .thenByDescending { it.score }
+                .thenByDescending { it.sampleSize }
+                .thenBy { it.message }
+        )
+        val chosen = mutableListOf<ReportInsight>()
+
+        fun materiallyOverlaps(a: ReportInsight, b: ReportInsight): Boolean {
+            // 証拠IDが無い比較結果は、重複率ではなく文章の一致だけで判断する。
+            val aIds = a.evidenceLogIds.toSet()
+            val bIds = b.evidenceLogIds.toSet()
+            if (aIds.isEmpty() || bIds.isEmpty()) return a.message == b.message
+            val common = aIds.intersect(bIds).size
+            // 小さい方の80%以上が重なれば、同じ出来事を言い換えている可能性が高い。
+            return common.toDouble() / minOf(aIds.size, bIds.size) >= 0.80
+        }
+        fun tryChoose(candidate: ReportInsight): Boolean {
+            if (chosen.size >= maxCount) return false
+            if (chosen.any { it.message == candidate.message || materiallyOverlaps(it, candidate) }) return false
+            chosen += candidate
+            return true
+        }
+
+        // 第1パス：異なる分析軸から一つずつ選ぶ。
+        for (candidate in sorted) {
+            if (chosen.size >= maxCount) break
+            if (chosen.any { it.kind == candidate.kind }) continue
+            tryChoose(candidate)
+        }
+        // 第2パス：異なる分析軸が足りなければ、異なる記録に基づく発見を追加。
+        if (chosen.size < maxCount) {
+            for (candidate in sorted) {
+                if (chosen.size >= maxCount) break
+                if (candidate in chosen) continue
+                tryChoose(candidate)
+            }
+        }
+        return chosen
+    }
+}
 
 /**
  * 公開API: 既存のDAOから取得した全件を渡して集計する。
@@ -353,8 +431,9 @@ object ReportAnalyzer {
             current, previous, summary, intensities, weekdays, timeSlots,
             categories, tags, comparison, timeZone, period
         )
+        val featured = ReportInsightSelector.select(insights)
         val readiness = evaluateReadiness(
-            period, summary, intensities, categories, tags, previous.size
+            period, summary, intensities, categories, tags, previous.size, featured
         )
         val details = ReportDetails(
             intensity = intensities,
@@ -366,7 +445,7 @@ object ReportAnalyzer {
             changes = changeSummary,
             insights = insights
         )
-        return ReportResult(period, summary, details, insights.firstOrNull(), readiness)
+        return ReportResult(period, summary, details, featured.firstOrNull(), readiness, featured)
     }
 
     private fun evaluateReadiness(
@@ -375,7 +454,8 @@ object ReportAnalyzer {
         intensities: List<ReportEmotionIntensity>,
         categories: List<ReportGroupBreakdown>,
         tags: List<ReportGroupBreakdown>,
-        previousCount: Int
+        previousCount: Int,
+        featured: List<ReportInsight>
     ): ReportReadiness {
         val sufficient = summary.totalCount >= 20 && summary.recordedDays >= 7
         val sections = mutableListOf<String>()
@@ -385,11 +465,20 @@ object ReportAnalyzer {
             sections += "カテゴリー・タグ"
         }
         if (summary.totalCount >= 10 && previousCount >= 10) sections += "前期間比較"
+        val reason = when {
+            period.type != ReportType.MONTH -> ReportOfferReason.NOT_MONTHLY
+            !sufficient -> ReportOfferReason.INSUFFICIENT_RECORDS
+            // 件数や分析セクションが揃っていても、根拠の異なる気づきが
+            // 2件未満なら販売しない。初回無料の権利も消費しない設計につなぐ。
+            featured.size < 2 -> ReportOfferReason.INSUFFICIENT_FINDINGS
+            else -> ReportOfferReason.READY
+        }
         return ReportReadiness(
             hasSufficientRecords = sufficient,
             availableSections = sections,
-            // 有料で出せるだけの材料があるときだけ案内する。
-            canOfferMonthlyDetail = period.type == ReportType.MONTH && sufficient && sections.size >= 2
+            canOfferMonthlyDetail = reason == ReportOfferReason.READY,
+            featuredInsightCount = featured.size,
+            offerReason = reason
         )
     }
 
