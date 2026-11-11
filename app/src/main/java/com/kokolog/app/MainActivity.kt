@@ -124,6 +124,14 @@ class MainActivity : ComponentActivity() {
                             ?.toSet().orEmpty())
                     }
                 }
+                // 内部テスト専用ビルド（internalPreview）とDebugのみ、詳細画面を確認できる。
+                // 通常のReleaseでは必ず閉じる。正式な購入権限とは切り離す。
+                val isDebuggable = (applicationInfo.flags and
+                    android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                val isMonthlyDetailTesterBuild = MonthlyDetailAccessPolicy.isTesterPreviewBuild(
+                    BuildConfig.BUILD_TYPE, isDebuggable
+                )
+
                 val markMonthlyReportViewed: (Int, Int) -> Unit = { year, month ->
                     val key = "%04d-%02d".format(Locale.ROOT, year, month)
                     if (key !in readReportMonthKeys) {
@@ -432,8 +440,42 @@ class MainActivity : ComponentActivity() {
                                         logs = emotionLogs,
                                         changeLogs = emotionChangeLogs,
                                         onMonthViewed = markMonthlyReportViewed,
-                                        onBack = { navController.popBackStack() }
+                                        onBack = { navController.popBackStack() },
+                                        enableDetailTesterPreview = isMonthlyDetailTesterBuild,
+                                        onDetailPreviewClick = { targetYear, targetMonth ->
+                                            if (isMonthlyDetailTesterBuild) {
+                                                navController.navigate("${Routes.MONTHLY_DETAIL_REPORT}/$targetYear/$targetMonth")
+                                            }
+                                        }
                                     )
+                                }
+                            }
+
+                            /**
+                             * STEP4: 月次詳細レポート（開発プレビュー）。
+                             * Debug / internalPreview のみ表示。
+                             * 本番Releaseには購入権限処理が未実装なので開放しない。
+                             */
+                            composable("${Routes.MONTHLY_DETAIL_REPORT}/{year}/{month}") { backStackEntry ->
+                                val year = backStackEntry.arguments?.getString("year")?.toIntOrNull()
+                                val month = backStackEntry.arguments?.getString("month")?.toIntOrNull()
+                                val validMonth = year != null && year in 2000..2100 &&
+                                    month != null && month in 1..12 &&
+                                    java.time.YearMonth.of(year, month) < java.time.YearMonth.now()
+                                if (isMonthlyDetailTesterBuild && validMonth) {
+                                    MonthlyDetailReportScreen(
+                                        year = year!!,
+                                        month = month!!,
+                                        logs = emotionLogs,
+                                        changeLogs = emotionChangeLogs,
+                                        onBack = { navController.popBackStack() },
+                                        onOpenLog = { logId ->
+                                            navController.navigate("${Routes.DETAIL}/$logId")
+                                        }
+                                    )
+                                } else {
+                                    // Releaseや不正な年月からの画面表示を防止。
+                                    Text("このレポートは現在準備中です。", color = KokologTextColor)
                                 }
                             }
 
@@ -4134,6 +4176,7 @@ object Routes {
     const val REFLECTION = "reflection"
     const val MONTHLY_REPORT = "monthly_report"
     const val MONTHLY_REPORT_ARCHIVE = "monthly_report_archive"
+    const val MONTHLY_DETAIL_REPORT = "monthly_detail_report"
     const val SETTINGS = "settings"
 
     // 詳細画面
