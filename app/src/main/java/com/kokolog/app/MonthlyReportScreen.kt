@@ -1,6 +1,7 @@
 package com.kokolog.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,6 +32,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -57,6 +61,7 @@ fun MonthlyReportScreen(
     changeLogs: List<EmotionChangeLog>,
     onMonthViewed: (Int, Int) -> Unit,
     onBack: () -> Unit,
+    onArchiveClick: () -> Unit = {},
     // STEP4.2: Debug / internalPreview ビルドでのみ詳細画面を確認する。
     enableDetailTesterPreview: Boolean = false,
     onDetailPreviewClick: (Int, Int) -> Unit = { _, _ -> }
@@ -67,6 +72,10 @@ fun MonthlyReportScreen(
     }
     val month = remember(monthKey) { YearMonth.parse(monthKey) }
     val latestClosedMonth = YearMonth.now().minusMonths(1)
+    val swipeThreshold = with(LocalDensity.current) { 64.dp.toPx() }
+    val reportScrollState = rememberScrollState()
+    // 月を変えると、長いレポートの途中ではなく新しい月の冒頭から読む。
+    LaunchedEffect(monthKey) { reportScrollState.scrollTo(0) }
 
     // mutableStateListOf を直接 remember のキーにすると、要素更新を検知できない場合がある。
     // スナップショットに変換し、追加・編集・削除後は再集計する。
@@ -94,7 +103,26 @@ fun MonthlyReportScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFFFAF7EF))
-            .verticalScroll(rememberScrollState())
+            // 横方向のみ検知。縦スクロールや通常のボタンタップを妨げない。
+            .pointerInput(monthKey, latestClosedMonth) {
+                var dragX = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { dragX = 0f },
+                    onHorizontalDrag = { change, amount ->
+                        change.consume()
+                        dragX += amount
+                    },
+                    onDragEnd = {
+                        when {
+                            dragX > swipeThreshold -> monthKey = month.minusMonths(1).toString()
+                            dragX < -swipeThreshold && month < latestClosedMonth ->
+                                monthKey = month.plusMonths(1).toString()
+                        }
+                    },
+                    onDragCancel = { dragX = 0f }
+                )
+            }
+            .verticalScroll(reportScrollState)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -164,6 +192,13 @@ fun MonthlyReportScreen(
                     fontSize = 22.sp
                 )
             }
+        }
+
+        TextButton(
+            onClick = onArchiveClick,
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            Text("過去の月次レポートを見る 〉", color = KokologTextColor, fontSize = 14.sp)
         }
 
         ReportPanel(Color(0xFFF0E8DC)) {
@@ -274,7 +309,7 @@ fun MonthlyReportScreen(
             }
 
             ReportPanel(Color(0xFFE7EFE6)) {
-                ReportTitle("今月の小さな発見", "✨")
+                ReportTitle(if (report.freePreview != null) "今月の小さな発見" else "今月の振り返りヒント", "✨")
                 if (report.freePreview != null) {
                     Text(
                         report.freePreview.message,
@@ -330,11 +365,12 @@ fun MonthlyReportScreen(
                     onClick = { onDetailPreviewClick(month.year, month.monthValue) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF8E7C68)
+                        containerColor = Color(0xFF8E7C68),
+                        contentColor = Color.White
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("詳細レポートを体験する（テスト版）", fontSize = 13.sp)
+                    Text("詳細レポートを体験する（テスト版）", fontSize = 13.sp, color = Color.White)
                 }
                 ReportSubText("※内部テスト用プレビューです。購入・初回無料体験は発生しません。")
             }

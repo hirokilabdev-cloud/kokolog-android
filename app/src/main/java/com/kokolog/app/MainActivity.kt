@@ -142,6 +142,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // カレンダーから新規記録へ渡す初期日時。ホームからの記録では使わない。
+                var calendarSelectedDay by remember { mutableStateOf<java.time.LocalDate?>(null) }
+                var recordInitialTimestamp by remember { mutableStateOf<Long?>(null) }
+                var recordStartedFromReflection by remember { mutableStateOf(false) }
+
                 // 最近のココロの表示非表示
                 var showRecentLogs by remember {
                     mutableStateOf(
@@ -224,6 +229,8 @@ class MainActivity : ComponentActivity() {
                         if (currentRoute == Routes.REFLECTION) {
                             FloatingActionButton(
                                 onClick = {
+                                    recordStartedFromReflection = true
+                                    recordInitialTimestamp = CalendarRecordDatePolicy.initialTimestamp(calendarSelectedDay)
                                     navController.navigate(Routes.RECORD)
                                 },
                                 containerColor = Color(0xFFB8A898)
@@ -364,6 +371,8 @@ class MainActivity : ComponentActivity() {
                                         logs = visibleEmotionLogs,
                                         showRecentLogs = showRecentLogs,
                                         onRecordClick = {
+                                            recordStartedFromReflection = false
+                                            recordInitialTimestamp = null
                                             navController.navigate(Routes.RECORD)
                                         },
                                         onLogClick = { log ->
@@ -378,6 +387,7 @@ class MainActivity : ComponentActivity() {
                              */
                             composable(Routes.RECORD) {
                                 RecordScreen(
+                                    initialDateTimeMillis = recordInitialTimestamp,
                                     onSave = { log ->
                                         coroutineScope.launch {
                                             emotionLogDao.insert(log)
@@ -389,8 +399,13 @@ class MainActivity : ComponentActivity() {
 
                                             snackbarHostState.showSnackbar("ココログをそっと保管しました")
 
-                                            // 保存後はホームへ戻す
-                                            if (returnHomeAfterSave) {
+                                            // カレンダーから追加した場合は選択日を保持した振り返りへ戻す。
+                                            // ホームからの追加では、従来の「保存後ホームに戻る」設定を尊重。
+                                            if (recordStartedFromReflection) {
+                                                recordStartedFromReflection = false
+                                                recordInitialTimestamp = null
+                                                navController.popBackStack()
+                                            } else if (returnHomeAfterSave) {
                                                 navController.navigate(Routes.HOME)
                                             }
                                         }
@@ -408,6 +423,7 @@ class MainActivity : ComponentActivity() {
                                     // レポートは「気にしない」の表示設定に関係なく全件を集計する。
                                     reportLogs = emotionLogs,
                                     readReportMonthKeys = readReportMonthKeys.toSet(),
+                                    onCalendarDateSelectionChange = { day -> calendarSelectedDay = day },
                                     onReportArchiveClick = {
                                         navController.navigate(Routes.MONTHLY_REPORT_ARCHIVE)
                                     },
@@ -441,6 +457,7 @@ class MainActivity : ComponentActivity() {
                                         changeLogs = emotionChangeLogs,
                                         onMonthViewed = markMonthlyReportViewed,
                                         onBack = { navController.popBackStack() },
+                                        onArchiveClick = { navController.navigate(Routes.MONTHLY_REPORT_ARCHIVE) },
                                         enableDetailTesterPreview = isMonthlyDetailTesterBuild,
                                         onDetailPreviewClick = { targetYear, targetMonth ->
                                             if (isMonthlyDetailTesterBuild) {
@@ -860,6 +877,7 @@ fun findRecentKokoroLog(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordScreen(
+    initialDateTimeMillis: Long? = null,
 
     // 保存時に呼ばれる関数
     onSave: (EmotionLog) -> Unit
@@ -895,8 +913,8 @@ fun RecordScreen(
     }
 
     // 記録日時
-    var selectedDateTimeMillis by remember {
-        mutableStateOf(System.currentTimeMillis())
+    var selectedDateTimeMillis by remember(initialDateTimeMillis) {
+        mutableStateOf(initialDateTimeMillis ?: System.currentTimeMillis())
     }
 
     // 未来日チェック

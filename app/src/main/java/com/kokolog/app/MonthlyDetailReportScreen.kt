@@ -1,6 +1,7 @@
 package com.kokolog.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -31,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -42,13 +45,23 @@ import java.util.Locale
 
 private val DetailPage = Color(0xFFFAF7EF)
 private val DetailPaper = Color(0xFFFFFCF7)
-private val DetailBeige = Color(0xFFF0E8DC)
-private val DetailMint = Color(0xFFE7EFE6)
-private val DetailMuted = Color(0xFF7A6A58)
-private val DetailInk = Color(0xFF4E463F)
+private val DetailSectionBg = Color(0xFFEEE4D6)
+private val DetailContentBg = Color(0xFFFFFCF7)
+private val DetailInsightBg = Color(0xFFE4EFE6)
+private val DetailInsightInk = Color(0xFF365D43)
+private val DetailActionBg = Color(0xFFD1E2D3)
+private val DetailActionBorder = Color(0xFF9FB9A5)
+private val DetailActionInk = Color(0xFF315841)
+private val DetailNoteBg = Color(0xFFF2EDF5)
+private val DetailNoteInk = Color(0xFF584965)
+private val DetailBeige = DetailSectionBg
+private val DetailMint = DetailInsightBg
+private val DetailMuted = Color(0xFF695D51)
+private val DetailInk = Color(0xFF453D35)
+private val DetailDividerColor = Color(0xFFD7C9B7)
 
 /**
- * STEP4.2: 月次詳細レポート（Debug / 内部テスト用プレビュー）。
+ * STEP4.3-B: 月次詳細レポート（Debug / 内部テスト用プレビュー）。
  *
  * 注意: 課金/初回無料の権利チェックは未実装。
  *      MainActivityのルート側でビルド種別を再確認し、通常Releaseでは表示しない。
@@ -75,11 +88,29 @@ fun MonthlyDetailReportScreen(
         ReportAnalyzer.analyze(logsSnapshot, changesSnapshot, ReportPeriod.month(year, month))
     }
     // Related record dialog: 外部リンク等は使わず、既存の詳細画面へ。
-    var selectedInsight by remember { mutableStateOf<ReportInsight?>(null) }
+    var selectedEvidenceIds by remember { mutableStateOf<List<Long>?>(null) }
+    var showAfterHeartDialog by remember { mutableStateOf(false) }
+    val changeStories = remember(year, month, logsSnapshot, changesSnapshot) {
+        MonthlyAfterHeartPresentation.stories(logsSnapshot, changesSnapshot, report.period)
+    }
+    val ignoredRecords = remember(year, month, logsSnapshot) {
+        MonthlyAfterHeartPresentation.ignoredLogs(logsSnapshot, report.period)
+    }
     val overview = MonthlyDetailNarrative.overview(report)
     val summary = report.summary
     val details = report.details
     val showDetailedSections = MonthlyDetailNarrative.shouldShowDetailedSections(report)
+    val crossFindings = remember(year, month, logsSnapshot) {
+        MonthlyDetailCrossAnalysis.findings(logsSnapshot, report.period)
+    }
+    val heartAlbums = remember(year, month, logsSnapshot) {
+        MonthlyDetailExperience.albums(logsSnapshot, report.period)
+    }
+    val gentleHints = remember(year, month, logsSnapshot, crossFindings, report.readiness.canOfferMonthlyDetail) {
+        MonthlyDetailExperience.hints(
+            logsSnapshot, report.period, crossFindings, report.readiness.canOfferMonthlyDetail
+        )
+    }
 
     Column(
         modifier = Modifier.fillMaxSize()
@@ -116,7 +147,7 @@ fun MonthlyDetailReportScreen(
         // データが少ない月でもテスターは確認できる。販売対象外は短い注記のみ。
         if (!report.readiness.canOfferMonthlyDetail) {
             Text(
-                "※この月は有料の詳細分析の提供対象外です（テスト表示）。",
+                "今月は、記録をそのまま振り返るためのレポートです。（テスト表示）",
                 color = DetailMuted,
                 fontSize = 12.sp
             )
@@ -135,13 +166,69 @@ fun MonthlyDetailReportScreen(
                         fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     DetailBody(insight.message)
                     if (insight.evidenceLogIds.any { it > 0 }) {
-                        Text("関連するココロを読み返す　〉",
-                            modifier = Modifier.fillMaxWidth().clickable { selectedInsight = insight }
-                                .padding(vertical = 3.dp),
-                            color = Color(0xFF405847), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        DetailActionRow("この発見の記録を見る") {
+                            selectedEvidenceIds = insight.evidenceLogIds
+                        }
                     }
                 }
                 DetailFootnote("記録に見られた特徴です。感情の原因を推定したものではありません。")
+            }
+        }
+
+        // 強い感情と繰り返し残されたテーマを、自分の言葉とともに読み返す。
+        // アルバムは販売対象外の月でもプレビューで確認できるが、購入可能判定には使用しない。
+        if (heartAlbums.isNotEmpty()) {
+            DetailCard(DetailSectionBg) {
+                DetailHeading("今月のココロアルバム", "📚")
+                DetailFootnote("記録の中から、振り返りやすい形でココロを集めました。感情に良い・悪いの点数は付けていません。")
+                heartAlbums.forEachIndexed { index, album ->
+                    if (index > 0) DetailDivider()
+                    Text(album.title, color = DetailInk, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    DetailBody(album.description)
+                    val albumEntries = album.evidenceLogIds.mapNotNull { albumId ->
+                        logsSnapshot.firstOrNull { it.id == albumId }
+                    }
+                    albumEntries.take(3).forEach { log ->
+                        Column(
+                            modifier = Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(DetailContentBg)
+                                .clickable(role = Role.Button) { onOpenLog(log.id) }
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                "${SimpleDateFormat("M/d", Locale.JAPAN).format(Date(log.createdAt))}  ${emotionIcon(log.emotion)} ${log.emotion}",
+                                color = DetailInk, fontSize = 14.sp, fontWeight = FontWeight.Bold
+                            )
+                            val meta = listOfNotNull(log.category.takeIf { it.isNotBlank() },
+                                MonthlyDetailRecordPreview.intensity(log.intensity)).joinToString("  ・  ")
+                            if (meta.isNotBlank()) Text(meta, color = DetailMuted, fontSize = 12.sp)
+                            MonthlyDetailRecordPreview.tags(log.tags).takeIf { it.isNotBlank() }?.let {
+                                Text(it, color = Color(0xFF526A55), fontSize = 12.sp)
+                            }
+                            MonthlyDetailRecordPreview.memo(log.memo)?.let {
+                                Text(it, color = DetailInk, fontSize = 13.sp, lineHeight = 19.sp)
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .clip(RoundedCornerShape(9.dp)).background(DetailActionBg)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("このココロを開く", color = DetailActionInk, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("›", color = DetailActionInk, fontSize = 19.sp)
+                            }
+                        }
+                    }
+                    if (album.totalCount > 3) {
+                        Text("ほか${album.totalCount - 3}件のココロがあります。", color = DetailMuted, fontSize = 12.sp)
+                    }
+                    DetailActionRow("このアルバムの記録をすべて見る（${album.totalCount}件）") {
+                        selectedEvidenceIds = album.evidenceLogIds
+                    }
+                }
             }
         }
 
@@ -186,19 +273,9 @@ fun MonthlyDetailReportScreen(
                     DetailBarRow("強度$level", count, maxOf(1, top.validCount), Color(0xFFB7AAC8), "$count 件")
                 }
                 DetailFootnote("今月記録された強度だけを表示しています。")
-                DetailNote(MonthlyDetailNarrative.intensityText(top), Color(0xFFF5F0F7))
+                DetailNote(MonthlyDetailNarrative.intensityText(top))
             }
-            val changes = details.changes
-            if (changes.changeEventCount > 0) {
-                DetailDivider()
-                DetailBody("「その後のココロ」を残した記録：${changes.originalLogsWithChanges}件（変化の記録 ${changes.changeEventCount}件）")
-                changes.transitions.firstOrNull()?.let {
-                    DetailFootnote("記録された変化の例：${it.fromEmotion} → ${it.toEmotion}（${it.count}回）")
-                }
-            } else {
-                DetailFootnote("この月に集計対象となる「その後のココロ」はありませんでした。")
-            }
-            DetailInsight(report, { selectedInsight = it }, ReportInsightKind.INTENSITY)
+            DetailInsight(report, { selectedEvidenceIds = it.evidenceLogIds }, ReportInsightKind.INTENSITY)
         }
 
         DetailSection(2, "曜日・時間帯の傾向", "いつココロを残すことが多かった？") {
@@ -218,7 +295,7 @@ fun MonthlyDetailReportScreen(
             }
             DetailFootnote("この月に記録のあった曜日・時間帯だけを表示しています。")
             DetailFootnote("時間はココロに設定した記録日時に基づきます。件数だけで感情の原因を判断することはできません。")
-            DetailInsight(report, { selectedInsight = it }, ReportInsightKind.WEEKDAY, ReportInsightKind.TIME_SLOT)
+            DetailInsight(report, { selectedEvidenceIds = it.evidenceLogIds }, ReportInsightKind.WEEKDAY, ReportInsightKind.TIME_SLOT)
         }
 
         DetailSection(3, "カテゴリー・タグのつながり", "どんなテーマについて、どんなココロを残した？") {
@@ -237,7 +314,25 @@ fun MonthlyDetailReportScreen(
                 if (details.tags.size > 4) DetailFootnote("このほかに${details.tags.size - 4}種類のタグがあります。")
             }
             DetailFootnote("1件の記録に複数タグを付けられるため、タグの件数を合計しても記録総数と一致しないことがあります。")
-            DetailInsight(report, { selectedInsight = it }, ReportInsightKind.CATEGORY, ReportInsightKind.TAG)
+            if (crossFindings.isNotEmpty()) {
+                DetailDivider()
+                Text("組み合わせて見つけたこと", color = DetailInk,
+                    fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                crossFindings.forEach { finding ->
+                    DetailInsightCard {
+                        Text("${if (finding.source == CrossSource.TAG) "#" else ""}${finding.groupName}｜${finding.title}",
+                            color = DetailInsightInk, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text(finding.message, color = DetailInsightInk, fontSize = 14.sp, lineHeight = 22.sp)
+                        if (finding.evidenceLogIds.isNotEmpty()) {
+                            DetailActionRow("このテーマの記録を見る") {
+                                selectedEvidenceIds = finding.evidenceLogIds
+                            }
+                        }
+                    }
+                }
+                DetailFootnote("同じテーマで一緒に記録された気持ちを並べています。出来事と感情の因果関係を示すものではありません。")
+            }
+            DetailInsight(report, { selectedEvidenceIds = it.evidenceLogIds }, ReportInsightKind.CATEGORY, ReportInsightKind.TAG)
         }
 
         DetailSection(4, "前月のココロと比べる", "先月から、記録された感情の割合はどう変わった？") {
@@ -247,7 +342,7 @@ fun MonthlyDetailReportScreen(
                 DetailMetric("${previousMonth.monthValue}月", "${comparison.previousTotalCount}件", Modifier.weight(1f))
                 DetailMetric("${month}月", "${comparison.currentTotalCount}件", Modifier.weight(1f))
             }
-            DetailNote(MonthlyDetailNarrative.comparisonText(report), Color(0xFFF5F0F7))
+            DetailNote(MonthlyDetailNarrative.comparisonText(report))
             if (comparison.previousTotalCount >= 10 && comparison.currentTotalCount >= 10) {
                 comparison.emotionComparisons.take(3).forEach { emotion ->
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
@@ -259,10 +354,65 @@ fun MonthlyDetailReportScreen(
                 }
             }
             DetailFootnote("割合は各月の全記録を分母に計算しています。増減は良し悪しや改善・悪化を表すものではありません。")
-            DetailInsight(report, { selectedInsight = it }, ReportInsightKind.PERIOD_COMPARISON)
+            DetailInsight(report, { selectedEvidenceIds = it.evidenceLogIds }, ReportInsightKind.PERIOD_COMPARISON)
         }
 
         } // showDetailedSections: 4つの分析セクションは、提供できる発見がある月だけ展開。
+
+        // STEP4.3-D: 感情の「その後」を元の記録とともに時系列で振り返る。
+        // 記録数が少ない月でも、事実として存在する履歴なら表示する。
+        if (changeStories.isNotEmpty()) {
+            DetailCard(DetailSectionBg) {
+                DetailHeading("その後のココロ", "🌿")
+                val eventCount = changeStories.sumOf { it.events.size }
+                DetailCard(DetailContentBg) {
+                    DetailBody("その後を残した記録 ${changeStories.size}件・変化の記録 ${eventCount}回")
+                    changeStories.take(2).forEach { story ->
+                        val last = story.events.last()
+                        Text(
+                            "${emotionIcon(story.original.emotion)} ${story.original.emotion} → ${emotionIcon(last.emotion)} ${last.emotion}",
+                            color = DetailInk, fontSize = 14.sp, fontWeight = FontWeight.Medium
+                        )
+                    }
+                    DetailFootnote("記録された気持ちの経過です。回復や改善を意味するものではありません。")
+                    DetailActionRow("変化の経過を読み返す（${changeStories.size}件）") {
+                        showAfterHeartDialog = true
+                    }
+                }
+            }
+        }
+        // 「気にしない」は感情の変化とは異なる設定なので、別枠にする。
+        if (ignoredRecords.isNotEmpty()) {
+            DetailCard(DetailSectionBg) {
+                DetailHeading("気にしないにしたココロ", "🍃")
+                DetailCard(DetailContentBg) {
+                    DetailBody("この月は${ignoredRecords.size}件のココロを「気にしない」にしました。")
+                    DetailFootnote("設定した記録をそのまま振り返れます。気持ちが変わったと判断するものではありません。")
+                    DetailActionRow("気にしないにした記録を見る（${ignoredRecords.size}件）") {
+                        selectedEvidenceIds = ignoredRecords.map { it.id }
+                    }
+                }
+            }
+        }
+
+        // 行動の指示ではなく、記録を基にした任意の問いを届ける。
+        // 特徴の根拠がない月は、無理に「パーソナルな助言」を生成しない。
+        if (gentleHints.isNotEmpty()) {
+            DetailCard(DetailMint) {
+                DetailHeading("来月の小さなヒント", "🌱")
+                DetailFootnote("今月の記録を手掛かりにした、振り返りの提案です。何かを変える必要はありません。")
+                gentleHints.forEachIndexed { index, hint ->
+                    if (index > 0) DetailDivider()
+                    Text(hint.title, color = Color(0xFF405847), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    DetailBody(hint.observation)
+                    DetailNote(hint.question, DetailPaper)
+                    DetailActionRow("ヒントの元になった記録を見る") {
+                        selectedEvidenceIds = hint.evidenceLogIds
+                    }
+                }
+                DetailFootnote("記録上の関連をもとにしています。出来事が感情の原因だと判断したり、未来を予測したりするものではありません。")
+            }
+        }
 
         DetailCard(DetailBeige) {
             DetailHeading("今月のココロを振り返って", "📖")
@@ -274,34 +424,98 @@ fun MonthlyDetailReportScreen(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), textAlign = TextAlign.Center)
     }
 
-    selectedInsight?.let { insight ->
-        val evidence = logsSnapshot.filter { it.id in insight.evidenceLogIds && it.id > 0 }
-            .sortedByDescending { it.createdAt }
+    if (showAfterHeartDialog) {
         AlertDialog(
-            onDismissRequest = { selectedInsight = null },
+            onDismissRequest = { showAfterHeartDialog = false },
             containerColor = DetailPaper,
-            title = { Text("関連するココロ", color = DetailInk, fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+            title = { Text("その後のココロ", color = DetailInk, fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("この発見の根拠になった記録です。", color = DetailMuted, fontSize = 13.sp)
-                    if (evidence.isEmpty()) {
-                        DetailBody("読み返せる記録がありません。")
-                    } else {
-                        evidence.take(5).forEach { log ->
+                Column(
+                    modifier = Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    DetailFootnote("最初のココロから、その後に記録した気持ちを順番に並べました。")
+                    changeStories.forEach { story ->
+                        DetailCard(DetailSectionBg) {
                             Text(
-                                "${SimpleDateFormat("M/d", Locale.JAPAN).format(Date(log.createdAt))}  ${emotionIcon(log.emotion)} ${log.emotion}　〉",
-                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                    .clickable { selectedInsight = null; onOpenLog(log.id) }
-                                    .padding(vertical = 8.dp),
-                                color = DetailInk, fontSize = 14.sp
+                                "${SimpleDateFormat("M/d HH:mm", Locale.JAPAN).format(Date(story.original.createdAt))}  ${emotionIcon(story.original.emotion)} ${story.original.emotion}",
+                                color = DetailInk, fontSize = 14.sp, fontWeight = FontWeight.Bold
                             )
+                            DetailFootnote("強さ ${story.original.intensity}/5 ・ ${story.original.category}")
+                            if (story.original.memo.isNotBlank()) DetailBody(story.original.memo)
+                            story.events.forEach { change ->
+                                DetailDivider()
+                                Text(
+                                    "↓  ${SimpleDateFormat("M/d HH:mm", Locale.JAPAN).format(Date(change.createdAt))}  ${emotionIcon(change.emotion)} ${change.emotion}",
+                                    color = DetailInk, fontSize = 14.sp, fontWeight = FontWeight.Bold
+                                )
+                                DetailFootnote("強さ ${change.intensity}/5")
+                                if (change.memo.isNotBlank()) DetailBody(change.memo)
+                            }
+                            DetailActionRow("元のココロを開く") {
+                                showAfterHeartDialog = false
+                                onOpenLog(story.original.id)
+                            }
                         }
-                        if (evidence.size > 5) DetailFootnote("ほかに${evidence.size - 5}件の記録があります。")
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { selectedInsight = null }) { Text("閉じる", color = DetailInk) }
+                TextButton(onClick = { showAfterHeartDialog = false }) { Text("閉じる", color = DetailInk) }
+            }
+        )
+    }
+
+    selectedEvidenceIds?.let { ids ->
+        val evidence = logsSnapshot.filter { it.id > 0 && it.id in ids }
+            .distinctBy { it.id }.sortedByDescending { it.createdAt }
+        AlertDialog(
+            onDismissRequest = { selectedEvidenceIds = null },
+            containerColor = DetailPaper,
+            title = { Text("関連するココロ", color = DetailInk, fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("この発見の根拠となった記録です。", color = DetailMuted, fontSize = 13.sp)
+                    if (evidence.isEmpty()) {
+                        DetailBody("読み返せる記録がありません。")
+                    } else {
+                        evidence.forEachIndexed { index, log ->
+                            if (index > 0) DetailDivider()
+                            Column(
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                    .background(DetailSectionBg)
+                                    .clickable(role = Role.Button) { selectedEvidenceIds = null; onOpenLog(log.id) }
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Row(modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Text("${SimpleDateFormat("M/d", Locale.JAPAN).format(Date(log.createdAt))}  ${emotionIcon(log.emotion)} ${log.emotion}",
+                                        color = DetailInk, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text("記録を開く ›", color = DetailActionInk, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                                val info = listOfNotNull(
+                                    "カテゴリー：${log.category}",
+                                    MonthlyDetailRecordPreview.intensity(log.intensity)
+                                ).joinToString("  ・  ")
+                                Text(info, color = DetailMuted, fontSize = 12.sp)
+                                MonthlyDetailRecordPreview.tags(log.tags).takeIf { it.isNotBlank() }?.let {
+                                    Text(it, color = Color(0xFF526A55), fontSize = 12.sp)
+                                }
+                                MonthlyDetailRecordPreview.memo(log.memo)?.let {
+                                    Text(it, color = DetailInk, fontSize = 12.sp, lineHeight = 18.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedEvidenceIds = null }) { Text("閉じる", color = DetailInk) }
             }
         )
     }
@@ -311,7 +525,7 @@ fun MonthlyDetailReportScreen(
 @Composable
 private fun DetailSection(number: Int, title: String, subtitle: String,
                           content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    DetailCard(DetailSectionBg) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier.clip(RoundedCornerShape(7.dp)).background(Color(0xFFE8DDD0)).padding(9.dp)
@@ -322,7 +536,7 @@ private fun DetailSection(number: Int, title: String, subtitle: String,
                 Text(subtitle, color = DetailMuted, fontSize = 13.sp)
             }
         }
-        DetailCard(DetailPaper, content)
+        DetailCard(DetailContentBg, content)
     }
 }
 
@@ -353,17 +567,46 @@ private fun DetailCard(background: Color,
 }
 
 @Composable private fun DetailDivider() {
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFECE4D9)))
+    Box(Modifier.fillMaxWidth().height(1.dp).background(DetailDividerColor))
 }
 
-@Composable private fun DetailNote(text: String, color: Color) {
+@Composable private fun DetailNote(text: String, color: Color = DetailNoteBg) {
     Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(color).padding(12.dp)) {
-        DetailBody(text)
+        Text(text, color = if (color == DetailNoteBg) DetailNoteInk else DetailInk,
+            fontSize = 14.sp, lineHeight = 22.sp)
+    }
+}
+
+/** 気づきと数値の事実を明確に区別する共通カード。 */
+@Composable
+private fun DetailInsightCard(
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
+) {
+    DetailCard(DetailInsightBg, content)
+}
+
+/** 行全体が押せる、詳細レポート内の共通操作部品。 */
+@Composable
+private fun DetailActionRow(label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(DetailActionBg)
+            .border(1.dp, DetailActionBorder, RoundedCornerShape(12.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = DetailActionInk, fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(8.dp))
+        Text("›", color = DetailActionInk, fontSize = 22.sp)
     }
 }
 
 @Composable private fun DetailMetric(label: String, value: String, modifier: Modifier) {
-    Column(modifier = modifier.clip(RoundedCornerShape(10.dp)).background(DetailBeige).padding(13.dp),
+    Column(modifier = modifier.clip(RoundedCornerShape(10.dp)).background(DetailContentBg).padding(13.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(label, color = DetailMuted, fontSize = 12.sp)
         Text(value, color = DetailInk, fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -409,18 +652,14 @@ private fun DetailGroupRow(group: ReportGroupBreakdown, total: Int, tag: Boolean
 private fun DetailInsight(report: ReportResult, onSelect: (ReportInsight) -> Unit,
                           vararg kinds: ReportInsightKind) {
     val insight = MonthlyDetailNarrative.insightFor(report, *kinds) ?: return
-    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-        .background(DetailMint).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("✨ 記録から見えてきたこと", color = Color(0xFF405847),
+    // 冒頭の「今月の発見」と同じ文章をここで繰り返さない。
+    if (insight in report.featuredInsights) return
+    DetailInsightCard {
+        Text("✨ 記録から見えてきたこと", color = DetailInsightInk,
             fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        if (insight in report.featuredInsights) {
-            DetailFootnote("冒頭で紹介した発見です。上の分析とあわせて振り返れます。")
-        } else {
-            Text(insight.message, color = Color(0xFF405847), fontSize = 14.sp, lineHeight = 22.sp)
-        }
+        Text(insight.message, color = DetailInsightInk, fontSize = 14.sp, lineHeight = 22.sp)
         if (insight.evidenceLogIds.any { it > 0 }) {
-            Text("関連するココロを読み返す　〉", modifier = Modifier.clickable { onSelect(insight) },
-                color = Color(0xFF405847), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            DetailActionRow("関連する記録を見る") { onSelect(insight) }
         }
     }
 }
