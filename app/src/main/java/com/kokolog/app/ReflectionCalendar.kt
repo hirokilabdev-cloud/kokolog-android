@@ -71,7 +71,8 @@ fun ReflectionScreen(
     onMonthlyReportClick: (Int, Int) -> Unit,
     onReportArchiveClick: () -> Unit,
     readReportMonthKeys: Set<String>,
-    onLogClick: (EmotionLog) -> Unit
+    onLogClick: (EmotionLog) -> Unit,
+    onCalendarDateSelectionChange: (LocalDate?) -> Unit = {}
 ) {
     var selectedTab by rememberSaveable { mutableStateOf("calendar") }
     val stateHolder = rememberSaveableStateHolder()
@@ -90,7 +91,10 @@ fun ReflectionScreen(
             listOf("calendar" to "カレンダー", "category" to "カテゴリー").forEach { (key, label) ->
                 val selected = selectedTab == key
                 Button(
-                    onClick = { selectedTab = key },
+                    onClick = {
+                        selectedTab = key
+                        if (key != "calendar") onCalendarDateSelectionChange(null)
+                    },
                     modifier = Modifier.weight(1f).height(40.dp),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -113,7 +117,8 @@ fun ReflectionScreen(
                         onMonthlyReportClick = onMonthlyReportClick,
                         onReportArchiveClick = onReportArchiveClick,
                         readReportMonthKeys = readReportMonthKeys,
-                        onLogClick = onLogClick
+                        onLogClick = onLogClick,
+                        onCalendarDateSelectionChange = onCalendarDateSelectionChange
                     )
                 }
             } else {
@@ -143,7 +148,8 @@ private fun ReflectionCalendarContent(
     onMonthlyReportClick: (Int, Int) -> Unit,
     onReportArchiveClick: () -> Unit,
     readReportMonthKeys: Set<String>,
-    onLogClick: (EmotionLog) -> Unit
+    onLogClick: (EmotionLog) -> Unit,
+    onCalendarDateSelectionChange: (LocalDate?) -> Unit
 ) {
     var monthKey by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
     var selectedDay by rememberSaveable { mutableStateOf<Int?>(null) }
@@ -154,6 +160,10 @@ private fun ReflectionCalendarContent(
     var bookshelfMode by rememberSaveable { mutableStateOf<String?>(null) }
     var showMonthPicker by rememberSaveable { mutableStateOf(false) }
     val month = YearMonth.parse(monthKey)
+    // 日付の明示的な選択だけを＋ボタンへ共有。月移動時には解除する。
+    androidx.compose.runtime.LaunchedEffect(monthKey, selectedDay) {
+        onCalendarDateSelectionChange(selectedDay?.let { month.atDay(it) })
+    }
     val today = LocalDate.now()
     val zoneId = ZoneId.systemDefault()
     // 誤操作を防ぐため、ある程度横に動かしたときだけ月を切り替える。
@@ -176,14 +186,24 @@ private fun ReflectionCalendarContent(
     }
     val monthCount = logsInMonth.size
 
-    // 直近で記録がある「確定済みの月」を探す。
-    // カレンダーの表示フィルターに関係なく、すべての記録から判定する。
-    // 記録がない月に、レポートが届いたと誤認させない。
+    // STEP4.3-C：カレンダーの表示月に合わせてレポート案内を切り替える。
+    // 過去月を表示しているときは「その月の記録がある場合だけ」案内。
+    // 当月のカレンダーでは、従来どおり最新の確定済みレポートを案内する。
+    // カテゴリーなどのフィルターに左右されない全記録で判定する。
     val currentMonth = YearMonth.now()
-    val latestReportMonth = reportLogs.asSequence()
+    val closedReportMonths = reportLogs.asSequence()
         .map { log -> YearMonth.from(Instant.ofEpochMilli(log.createdAt).atZone(zoneId)) }
         .filter { it < currentMonth }
-        .maxOrNull()
+        .toSet()
+    val latestReportMonth = closedReportMonths.maxOrNull()
+    val selectedReportMonth = when {
+        month == currentMonth -> latestReportMonth
+        month in closedReportMonths -> month
+        else -> null
+    }
+
+    // 過去レポート一覧の入口は表示月にかかわらず残す。
+    val hasAnyClosedReport = latestReportMonth != null
 
     // 日付選択時に、月内の該当日ログを抽出する。
     // この選択だけでは画面遷移せず、カレンダー下部の内訳を更新する。
@@ -235,16 +255,16 @@ private fun ReflectionCalendarContent(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // STEP3: 最新の確定済みレポートへの入口をカレンダー上部に配置。
-        // 未閲覧は案内カード、閲覧後は省スペースのコンパクトカードに変化する。
-        // 既読状態はMainActivityで月ごとに管理し、画面復帰時にも反映される。
-        if (latestReportMonth != null) {
-            val reportKey = latestReportMonth.toString() // YYYY-MM
+        // STEP4.3-C：表示中の月のレポートへの入口をカレンダー上部に配置。
+        // 未閲覧は案内カード、閲覧後はコンパクト表示。
+        // 既読状態は年月ごとに管理されているため月移動に追従する。
+        if (selectedReportMonth != null) {
+            val reportKey = selectedReportMonth.toString() // YYYY-MM
             val isUnread = reportKey !in readReportMonthKeys
             Card(
                 modifier = Modifier.fillMaxWidth()
                     .clickable(role = Role.Button) {
-                        onMonthlyReportClick(latestReportMonth.year, latestReportMonth.monthValue)
+                        onMonthlyReportClick(selectedReportMonth.year, selectedReportMonth.monthValue)
                     },
                 shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(
@@ -262,7 +282,7 @@ private fun ReflectionCalendarContent(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                "📖 ${latestReportMonth.year}年${latestReportMonth.monthValue}月のココロが届きました",
+                                "📖 ${selectedReportMonth.year}年${selectedReportMonth.monthValue}月のココロが届きました",
                                 modifier = Modifier.weight(1f),
                                 color = KokologTextColor,
                                 fontSize = 14.sp,
@@ -298,7 +318,7 @@ private fun ReflectionCalendarContent(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            "📖 ${latestReportMonth.year}年${latestReportMonth.monthValue}月のココロを振り返る",
+                            "📖 ${selectedReportMonth.year}年${selectedReportMonth.monthValue}月のココロを振り返る",
                             modifier = Modifier.weight(1f),
                             color = KokologTextColor,
                             fontSize = 13.sp,
@@ -310,8 +330,8 @@ private fun ReflectionCalendarContent(
             }
         }
 
-        // 過去のレポートへいつでも進める入口。確定済みの記録がない場合は出さない。
-        if (latestReportMonth != null) {
+        // 表示月にレポートがなくても、過去月に記録があれば一覧へ進める。
+        if (hasAnyClosedReport) {
             Row(
                 modifier = Modifier.fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
