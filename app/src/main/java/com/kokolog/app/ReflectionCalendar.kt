@@ -125,7 +125,8 @@ fun ReflectionScreen(
                 stateHolder.SaveableStateProvider("category_view") {
                     ReflectionCategoryContent(
                         logs = logs,
-                        onLogClick = onLogClick
+                        onLogClick = onLogClick,
+                        onReportArchiveClick = onReportArchiveClick
                     )
                 }
             }

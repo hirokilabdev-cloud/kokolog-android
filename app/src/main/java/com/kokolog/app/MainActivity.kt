@@ -1946,7 +1946,8 @@ fun ReflectionCategoryContent(
 
     // 表示対象の感情ログ一覧
     logs: List<EmotionLog>,
-    onLogClick: (EmotionLog) -> Unit
+    onLogClick: (EmotionLog) -> Unit,
+    onReportArchiveClick: () -> Unit
 
 ) {
 
@@ -2328,9 +2329,7 @@ fun ReflectionCategoryContent(
 
                 item {
                     Button(
-                        onClick = {
-                            summaryDialogType = "month"
-                        },
+                        onClick = onReportArchiveClick,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFFDCE8D2),
                             contentColor = KokologTextColor
@@ -2343,7 +2342,7 @@ fun ReflectionCategoryContent(
                         )
                     ) {
                         Text(
-                            text = "📚 今月のココロ",
+                            text = "📖 月次レポート一覧",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
