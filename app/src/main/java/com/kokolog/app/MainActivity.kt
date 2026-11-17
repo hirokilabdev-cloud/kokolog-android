@@ -4031,7 +4031,7 @@ fun SettingsScreen(
                     )
 
                     Text(
-                        text = "Version 1.0.0",
+                        text = "Version ${BuildConfig.VERSION_NAME}",
                         color = KokologSubTextColor
                     )
                 }
