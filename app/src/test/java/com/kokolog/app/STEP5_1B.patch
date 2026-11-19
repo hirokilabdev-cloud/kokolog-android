@@ -1,0 +1,227 @@
+diff --git a/app/src/main/java/com/kokolog/app/ReportEntitlementRepository.kt b/app/src/main/java/com/kokolog/app/ReportEntitlementRepository.kt
+new file mode 100644
+index 0000000..aab8b3b
+--- /dev/null
++++ b/app/src/main/java/com/kokolog/app/ReportEntitlementRepository.kt
+@@ -0,0 +1,111 @@
++package com.kokolog.app
++
++import java.time.Clock
++import java.time.Instant
++import java.time.YearMonth
++import java.time.ZoneId
++import java.util.TimeZone
++
++/**
++ * 画面向けの権限状態。PAYMENT_REQUIRES_VERIFICATION は「閲覧可」ではない。
++ * Google Play の購入照会が実装されるまでは、有料購入履歴だけで解放しない。
++ */
++enum class MonthlyDetailAccessStatus {
++    LOCKED,
++    FREE_TRIAL_UNLOCKED,
++    PAYMENT_REQUIRES_VERIFICATION
++}
++
++enum class FirstFreeTrialResult {
++    GRANTED,
++    ALREADY_UNLOCKED,
++    TRIAL_ALREADY_USED,
++    MONTH_ALREADY_ASSIGNED,
++    NOT_ELIGIBLE
++}
++
++/**
++ * UI から DAO や Billing を直接参照させないためのインターフェース。
++ * 将来、サーバー方式に移行しても画面側の API を維持できる。
++ */
++interface ReportEntitlementRepository {
++    suspend fun accessForMonth(month: YearMonth): MonthlyDetailAccessStatus
++    suspend fun hasUsedFreeTrial(): Boolean
++    suspend fun grantFirstFreeTrial(report: ReportResult): FirstFreeTrialResult
++}
++
++/**
++ * STEP5.1-B: ログインなし・Room 管理の閲覧権限。
++ * - 無料解放: DAO の @Transaction により二重使用を防止。
++ * - 有料購入: 現段階では照会・解放しない。STEP5.2 の Billing 連携で対応。
++ * - 画面との接続: STEP5.1-C で実施。現行の無料レポート表示は変更しない。
++ */
++class RoomReportEntitlementRepository(
++    private val dao: ReportEntitlementDao,
++    private val clock: Clock = Clock.systemDefaultZone()
++) : ReportEntitlementRepository {
++
++    override suspend fun accessForMonth(month: YearMonth): MonthlyDetailAccessStatus {
++        val entitlement = dao.getByMonth(month.toString())
++            ?: return MonthlyDetailAccessStatus.LOCKED
++        if (entitlement.status != ReportEntitlementEntity.ACTIVE) {
++            return MonthlyDetailAccessStatus.LOCKED
++        }
++        return when (entitlement.unlockMethod) {
++            ReportEntitlementEntity.FREE_TRIAL -> MonthlyDetailAccessStatus.FREE_TRIAL_UNLOCKED
++            ReportEntitlementEntity.PLAY_PURCHASE -> MonthlyDetailAccessStatus.PAYMENT_REQUIRES_VERIFICATION
++            else -> MonthlyDetailAccessStatus.LOCKED
++        }
++    }
++
++    override suspend fun hasUsedFreeTrial(): Boolean = dao.hasUsedFreeTrial()
++
++    override suspend fun grantFirstFreeTrial(report: ReportResult): FirstFreeTrialResult {
++        val month = eligibleClosedMonth(report) ?: return FirstFreeTrialResult.NOT_ELIGIBLE
++        val key = month.toString()
++        val existing = dao.getByMonth(key)
++        if (existing != null) return resultForExisting(existing)
++        if (dao.hasUsedFreeTrial()) return FirstFreeTrialResult.TRIAL_ALREADY_USED
++
++        // 最終的な競合防止は DAO の @Transaction に任せる。
++        if (dao.grantFirstFreeTrial(key, clock.millis())) return FirstFreeTrialResult.GRANTED
++
++        // 別操作で同時に権限が作られたケースを判定する。
++        val after = dao.getByMonth(key)
++        return if (after != null) resultForExisting(after)
++        else FirstFreeTrialResult.TRIAL_ALREADY_USED
++    }
++
++    private fun resultForExisting(item: ReportEntitlementEntity): FirstFreeTrialResult =
++        if (item.unlockMethod == ReportEntitlementEntity.FREE_TRIAL &&
++            item.status == ReportEntitlementEntity.ACTIVE
++        ) {
++            FirstFreeTrialResult.ALREADY_UNLOCKED
++        } else {
++            FirstFreeTrialResult.MONTH_ALREADY_ASSIGNED
++        }
++
++    private fun eligibleClosedMonth(report: ReportResult): YearMonth? {
++        if (report.period.type != ReportType.MONTH ||
++            report.summary.totalCount <= 0 ||
++            !report.readiness.canOfferMonthlyDetail
++        ) return null
++
++        val zone = runCatching { ZoneId.of(report.period.timeZoneId) }.getOrNull()
++            ?: return null
++        val start = Instant.ofEpochMilli(report.period.startMillis).atZone(zone)
++        val month = YearMonth.from(start)
++        if (month >= YearMonth.now(clock)) return null
++
++        // 月次の全期間を扱う ReportAnalyzer の結果だけを受け付ける。
++        val expected = ReportPeriod.month(
++            month.year,
++            month.monthValue,
++            TimeZone.getTimeZone(zone)
++        )
++        if (report.period.startMillis != expected.startMillis ||
++            report.period.endExclusiveMillis != expected.endExclusiveMillis
++        ) return null
++        return month
++    }
++}
+diff --git a/app/src/test/java/com/kokolog/app/ReportEntitlementRepositoryTest.kt b/app/src/test/java/com/kokolog/app/ReportEntitlementRepositoryTest.kt
+new file mode 100644
+index 0000000..c1b6954
+--- /dev/null
++++ b/app/src/test/java/com/kokolog/app/ReportEntitlementRepositoryTest.kt
+@@ -0,0 +1,104 @@
++package com.kokolog.app
++
++import java.time.Clock
++import java.time.Instant
++import java.time.YearMonth
++import java.time.ZoneOffset
++import java.util.TimeZone
++import kotlinx.coroutines.runBlocking
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++/** Room を使わない純粋な Repository テスト（DB の移行テストは別途）。 */
++class ReportEntitlementRepositoryTest {
++    private val clock = Clock.fixed(Instant.parse("2026-11-18T00:00:00Z"), ZoneOffset.UTC)
++    private val july = YearMonth.of(2026, 7)
++    private val august = YearMonth.of(2026, 8)
++
++    private fun report(month: YearMonth, totalCount: Int = 30, canOffer: Boolean = true): ReportResult {
++        val base = ReportAnalyzer.analyze(
++            emptyList(),
++            emptyList(),
++            ReportPeriod.month(month.year, month.monthValue, TimeZone.getTimeZone("UTC"))
++        )
++        // Repository には Analyzer が出した準備判定を受け渡す。
++        // この単体テストではその境界を独立に検証するため値のみ差し替える。
++        return base.copy(
++            summary = base.summary.copy(totalCount = totalCount),
++            readiness = base.readiness.copy(canOfferMonthlyDetail = canOffer)
++        )
++    }
++
++    @Test fun firstUnlockSucceedsAndSameMonthCannotConsumeTwice() = runBlocking {
++        val dao = FakeDao()
++        val repo = RoomReportEntitlementRepository(dao, clock)
++        assertFalse(repo.hasUsedFreeTrial())
++        assertEquals(FirstFreeTrialResult.GRANTED, repo.grantFirstFreeTrial(report(july)))
++        assertEquals(MonthlyDetailAccessStatus.FREE_TRIAL_UNLOCKED, repo.accessForMonth(july))
++        assertEquals(FirstFreeTrialResult.ALREADY_UNLOCKED, repo.grantFirstFreeTrial(report(july)))
++        assertEquals(1, dao.getAll().size)
++        assertTrue(repo.hasUsedFreeTrial())
++    }
++
++    @Test fun freeTrialCannotBeRedeemedForAnotherMonth() = runBlocking {
++        val repo = RoomReportEntitlementRepository(FakeDao(), clock)
++        assertEquals(FirstFreeTrialResult.GRANTED, repo.grantFirstFreeTrial(report(july)))
++        assertEquals(FirstFreeTrialResult.TRIAL_ALREADY_USED, repo.grantFirstFreeTrial(report(august)))
++        assertEquals(MonthlyDetailAccessStatus.LOCKED, repo.accessForMonth(august))
++    }
++
++    @Test fun ineligibleMonthIsNotRedeemable() = runBlocking {
++        val repo = RoomReportEntitlementRepository(FakeDao(), clock)
++        assertEquals(FirstFreeTrialResult.NOT_ELIGIBLE, repo.grantFirstFreeTrial(report(july, totalCount = 0)))
++        assertEquals(FirstFreeTrialResult.NOT_ELIGIBLE, repo.grantFirstFreeTrial(report(july, canOffer = false)))
++        assertEquals(FirstFreeTrialResult.NOT_ELIGIBLE, repo.grantFirstFreeTrial(report(YearMonth.of(2026, 11))))
++        val weekly = report(july).copy(period = ReportPeriod.weekContaining(Instant.parse("2026-07-15T12:00:00Z").toEpochMilli(), TimeZone.getTimeZone("UTC")))
++        assertEquals(FirstFreeTrialResult.NOT_ELIGIBLE, repo.grantFirstFreeTrial(weekly))
++        assertFalse(repo.hasUsedFreeTrial())
++    }
++
++    @Test fun paidRecordIsNeverUnlockedByLocalHistoryAlone() = runBlocking {
++        val dao = FakeDao()
++        dao.insertIfAbsent(ReportEntitlementEntity(
++            reportMonth = july.toString(),
++            unlockMethod = ReportEntitlementEntity.PLAY_PURCHASE,
++            grantedAt = clock.millis(),
++            status = ReportEntitlementEntity.ACTIVE,
++            playProductId = "monthly_report_2026_07",
++            purchaseToken = "test-only-token"
++        ))
++        val repo = RoomReportEntitlementRepository(dao, clock)
++        assertEquals(MonthlyDetailAccessStatus.PAYMENT_REQUIRES_VERIFICATION, repo.accessForMonth(july))
++        assertEquals(FirstFreeTrialResult.MONTH_ALREADY_ASSIGNED, repo.grantFirstFreeTrial(report(july)))
++        assertFalse(repo.hasUsedFreeTrial())
++    }
++
++    @Test fun revokedTrialStaysConsumedWithoutGrantingAccess() = runBlocking {
++        val dao = FakeDao()
++        dao.insertIfAbsent(ReportEntitlementEntity(
++            reportMonth = july.toString(),
++            unlockMethod = ReportEntitlementEntity.FREE_TRIAL,
++            grantedAt = clock.millis(),
++            status = ReportEntitlementEntity.REVOKED
++        ))
++        val repo = RoomReportEntitlementRepository(dao, clock)
++        assertTrue(repo.hasUsedFreeTrial())
++        assertEquals(MonthlyDetailAccessStatus.LOCKED, repo.accessForMonth(july))
++        assertEquals(FirstFreeTrialResult.TRIAL_ALREADY_USED, repo.grantFirstFreeTrial(report(august)))
++    }
++
++    private class FakeDao : ReportEntitlementDao {
++        private val items = linkedMapOf<String, ReportEntitlementEntity>()
++        override suspend fun getByMonth(reportMonth: String) = items[reportMonth]
++        override suspend fun getAll(): List<ReportEntitlementEntity> = items.values.toList()
++        override suspend fun hasUsedFreeTrial(): Boolean =
++            items.values.any { it.unlockMethod == ReportEntitlementEntity.FREE_TRIAL }
++        override suspend fun insertIfAbsent(item: ReportEntitlementEntity): Long {
++            if (items.containsKey(item.reportMonth)) return -1L
++            items[item.reportMonth] = item
++            return items.size.toLong()
++        }
++    }
++}
